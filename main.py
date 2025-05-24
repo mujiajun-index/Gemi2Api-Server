@@ -56,6 +56,7 @@ async def startup_event():
 
 # Global client
 gemini_client = None
+client_index = -1
 
 logger.info(f"Gemini API FastAPI Server is running. logger.level:{LOG_LEVEL}")
 # 打印所有可用模型以便调试
@@ -345,8 +346,13 @@ async def get_gemini_client():
 
 
 @app.post("/v1/chat/completions")
-async def create_chat_completion(request: ChatCompletionRequest, api_key: str = Depends(verify_api_key)):
+async def create_chat_completion(request: ChatCompletionRequest,http_request: Request,api_key: str = Depends(verify_api_key)):
 	try:
+		# 获取客户端真实IP地址
+		client_ip = http_request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or \
+				http_request.headers.get('X-Real-IP', '') or \
+				http_request.headers.get('CF-Connecting-IP', '') or \
+				http_request.client.host if http_request.client else "unknown_ip"
 		#获取客户端
 		gemini_client,client_index = await get_gemini_client()
 		if not gemini_client:
@@ -362,7 +368,7 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
 		model = map_model_name(request.model)
 		# 生成响应
 		current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-		logger.info(f"[{current_time}] Sending request [{request.model}] to Gemini model: {model}")
+		logger.info(f"[{client_ip}]-[{current_time}] Sending request [{request.model}] to Gemini model: {model}")
 		if temp_files:
 			# With files
 			response = await gemini_client.generate_content(conversation, files=temp_files, model=model)
@@ -462,7 +468,7 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
 	except Exception as e:
 		logger.error(f"Error generating completion: {e.args[0] if e.args else 'Unknown error'}")
 		error_message = e.args[0] if e.args else 'Unknown error'
-		if client_index >= 0 and 'Failed to initialize client. SECURE_1PSIDTS could get expired frequently' in error_message:
+		if not client_index and client_index >= 0 and 'Failed to initialize client. SECURE_1PSIDTS could get expired frequently' in error_message:
 			logger.error(f"删除已失效的客户端:第{client_index+1}个")
 			del GEMINI_CLIENT_LIST[client_index]
 			logger.info(f"剩余Gemini客户端数量: {len(GEMINI_CLIENT_LIST)}个")
