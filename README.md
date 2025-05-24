@@ -1,4 +1,7 @@
 # Gemi2Api-Server
+## 新增功能
+- 支持 `SECURE_1PSID` 和 `SECURE_1PSIDTS` 轮询配置，多凭证用 `,` 分割。
+
 [HanaokaYuzu / Gemini-API](https://github.com/HanaokaYuzu/Gemini-API) 的服务端简单实现
 
 [![pE79pPf.png](https://s21.ax1x.com/2025/04/28/pE79pPf.png)](https://imgse.com/i/pE79pPf)
@@ -111,3 +114,10 @@ docker-compose up -d --build
 <a href="https://github.com/zhiyu1998/Gemi2Api-Server/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=zhiyu1998/Gemi2Api-Server&max=1000" />
 </a>
+
+
+## 本地运行
+
+```bash
+   pip install .
+   uvicorn main:app --reload --host 0.0.0.0 --port 7860

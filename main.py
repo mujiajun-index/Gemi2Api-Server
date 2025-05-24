@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from math import log
 import os
 import base64
 import re
@@ -25,6 +26,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 set_log_level("INFO")
 
+# 加载.env文件中的环境变量
+load_dotenv()
+# 获取日志级别环境变量，默认为INFO
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+# Authentication credentials
+SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
+SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
+API_KEY = os.environ.get("API_KEY", "")
+
 app = FastAPI(title="Gemini API FastAPI Server")
 
 # Add CORS middleware
@@ -36,18 +46,22 @@ app.add_middleware(
 	allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    if SECURE_LIST:
+        logger.info("服务启动，开始初始化所有Gemini客户端...")
+        await initialize_all_clients()
+    else:
+        logger.warning("没有可用的凭证，跳过客户端初始化。")
+
 # Global client
 gemini_client = None
-# 加载.env文件中的环境变量
-load_dotenv()
-# 获取日志级别环境变量，默认为INFO
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-# Authentication credentials
-SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
-SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
-API_KEY = os.environ.get("API_KEY", "")
 
 logger.info(f"Gemini API FastAPI Server is running. logger.level:{LOG_LEVEL}")
+# 打印所有可用模型以便调试
+all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
+logger.info(f"Available models: {all_models}")
+		
 # Print debug info at startup
 if not SECURE_1PSID or not SECURE_1PSIDTS:
 	logger.warning("⚠️ Gemini API credentials are not set or empty! Please check your environment variables.")
@@ -67,6 +81,19 @@ if not API_KEY:
 else:
 	logger.info(f"API_KEY found. API_KEY starts with: {API_KEY[:5]}...")
 
+# 全局变量，用于存储所有的 SECURE_1PSID 和 SECURE_1PSIDTS
+SECURE_LIST = []
+
+# 验证和合并SECURE_1PSID和SECURE_1PSIDTS
+if SECURE_1PSID and SECURE_1PSIDTS:
+    psid_list = [psid.strip() for psid in SECURE_1PSID.split(',') if psid.strip()]
+    idts_list = [idts.strip() for idts in SECURE_1PSIDTS.split(',') if idts.strip()]
+    
+    if len(psid_list) != len(idts_list):
+        logger.error(f"SECURE_1PSID和SECURE_1PSIDTS的数量不一致！PSID数量: {len(psid_list)}, IDTS数量: {len(idts_list)}")
+    else:
+        SECURE_LIST = [{'PSID': psid, 'IDTS': idts} for psid, idts in zip(psid_list, idts_list)]
+        logger.info(f"成功加载{len(SECURE_LIST)}组凭证")
 
 def correct_markdown(md_text: str) -> str:
 	"""
@@ -210,16 +237,15 @@ async def list_models():
 # Helper to convert between Gemini and OpenAI model names
 def map_model_name(openai_model_name: str) -> Model:
 	"""根据模型名称字符串查找匹配的 Model 枚举值"""
-	# 打印所有可用模型以便调试
-	if LOG_LEVEL == "DEBUG" :
-		all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
-		logger.info(f"Available models: {all_models}")
-
 	# 首先尝试直接查找匹配的模型名称
 	for m in Model:
 		model_name = m.model_name if hasattr(m, "model_name") else str(m)
 		if openai_model_name.lower() in model_name.lower():
 			return m
+
+	# 如果找不到，返回错误加可用模型列表
+	all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
+	raise ValueError(f"Unknown model: {openai_model_name}. Available models: {all_models}")
 
 	# 如果找不到匹配项，使用默认映射
 	model_keywords = {
@@ -293,28 +319,38 @@ def prepare_conversation(messages: List[Message]) -> tuple:
 	return conversation, temp_files
 
 
-# Dependency to get the initialized Gemini client
-async def get_gemini_client():
-	global gemini_client
-	if gemini_client is None:
+# 初始化Gemini客户端列表
+GEMINI_CLIENT_LIST = []
+
+# 初始化所有Gemini客户端
+async def initialize_all_clients():
+	for idx, secure in enumerate(SECURE_LIST, 1):
 		try:
-			gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS)
-			await gemini_client.init(timeout=300)
+			client = GeminiClient(secure['PSID'], secure['IDTS'])
+			await client.init(timeout=300)
+			GEMINI_CLIENT_LIST.append(client)
+			logger.info(f"第{idx}个Gemini客户端初始化成功！")
 		except Exception as e:
-			logger.error(f"Failed to initialize Gemini client: {str(e)}")
-			raise HTTPException(status_code=500, detail=f"Failed to initialize Gemini client: {str(e)}")
-	return gemini_client
+			logger.error(f"第{idx}个Gemini客户端初始化失败, 请检查凭证是否过期失效！")
+	logger.info(f"总共成功初始化 {len(GEMINI_CLIENT_LIST)} 个Gemini客户端")
+# Dependency to get an initialized Gemini client
+async def get_gemini_client():
+	if not GEMINI_CLIENT_LIST or len(GEMINI_CLIENT_LIST) == 0:
+		return None,-1;
+	# 简单的轮询策略，每次返回列表中的下一个客户端
+	get_gemini_client.current_index = getattr(get_gemini_client, 'current_index', -1) + 1
+	get_gemini_client.current_index %= len(GEMINI_CLIENT_LIST)
+	logger.info(f"本次请求选择第{get_gemini_client.current_index + 1}个Gemini客户端进行对话")
+	return GEMINI_CLIENT_LIST[get_gemini_client.current_index],get_gemini_client.current_index
 
 
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest, api_key: str = Depends(verify_api_key)):
 	try:
-		# 确保客户端已初始化
-		global gemini_client
-		if gemini_client is None:
-			gemini_client = GeminiClient(SECURE_1PSID, SECURE_1PSIDTS)
-			await gemini_client.init(timeout=300)
-			logger.info("Gemini client initialized successfully")
+		#获取客户端
+		gemini_client,client_index = await get_gemini_client()
+		if not gemini_client:
+			raise HTTPException(status_code=401, detail="No Gemini clients available, 没有可用的Gemini客户端,请检查凭证是否过期失效！")
 
 		# 转换消息为对话格式
 		conversation, temp_files = prepare_conversation(request.messages)
@@ -419,15 +455,23 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
 			if LOG_LEVEL == "DEBUG" :
 				logger.info(f"Returning response: {result}")
 			return result
-
+	except HTTPException as e:
+		raise e
+	except ValueError as e:
+		raise HTTPException(status_code=400, detail=f"ValueError:{e.args[0] if e.args else 'Unknown error'}")
 	except Exception as e:
-		logger.error(f"Error generating completion: {str(e)}", exc_info=True)
-		raise HTTPException(status_code=500, detail=f"Error generating completion: {str(e)}")
+		logger.error(f"Error generating completion: {e.args[0] if e.args else 'Unknown error'}")
+		error_message = e.args[0] if e.args else 'Unknown error'
+		if client_index >= 0 and 'Failed to initialize client. SECURE_1PSIDTS could get expired frequently' in error_message:
+			logger.error(f"删除已失效的客户端:第{client_index+1}个")
+			del GEMINI_CLIENT_LIST[client_index]
+			logger.info(f"剩余Gemini客户端数量: {len(GEMINI_CLIENT_LIST)}个")
+		raise HTTPException(status_code=500, detail=f"Error generating completion: {e.args[0] if e.args else 'Unknown error'}")
 
 
 @app.get("/")
 async def root():
-	return {"status": "online", "message": "Gemini API FastAPI Server is running"}
+	return {"status": "online", "message": "Gemini API FastAPI Server is running","version":"2.12.1", "GEMINI_CLIENT_COUNT":len(GEMINI_CLIENT_LIST)}
 
 
 if __name__ == "__main__":
