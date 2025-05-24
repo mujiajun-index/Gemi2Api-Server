@@ -40,11 +40,14 @@ app.add_middleware(
 gemini_client = None
 # 加载.env文件中的环境变量
 load_dotenv()
+# 获取日志级别环境变量，默认为INFO
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 # Authentication credentials
 SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
 SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
 API_KEY = os.environ.get("API_KEY", "")
 
+logger.info(f"Gemini API FastAPI Server is running. logger.level:{LOG_LEVEL}")
 # Print debug info at startup
 if not SECURE_1PSID or not SECURE_1PSIDTS:
 	logger.warning("⚠️ Gemini API credentials are not set or empty! Please check your environment variables.")
@@ -208,8 +211,9 @@ async def list_models():
 def map_model_name(openai_model_name: str) -> Model:
 	"""根据模型名称字符串查找匹配的 Model 枚举值"""
 	# 打印所有可用模型以便调试
-	all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
-	logger.info(f"Available models: {all_models}")
+	if LOG_LEVEL == "DEBUG" :
+		all_models = [m.model_name if hasattr(m, "model_name") else str(m) for m in Model]
+		logger.info(f"Available models: {all_models}")
 
 	# 首先尝试直接查找匹配的模型名称
 	for m in Model:
@@ -314,15 +318,15 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
 
 		# 转换消息为对话格式
 		conversation, temp_files = prepare_conversation(request.messages)
-		logger.info(f"Prepared conversation: {conversation}")
-		logger.info(f"Temp files: {temp_files}")
+		if LOG_LEVEL == "DEBUG" :
+			logger.info(f"Prepared conversation: {conversation}")
+			logger.info(f"Temp files: {temp_files}")
 
 		# 获取适当的模型
 		model = map_model_name(request.model)
-		logger.info(f"Using model: {model}")
-
 		# 生成响应
-		logger.info("Sending request to Gemini...")
+		current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+		logger.info(f"[{current_time}] Sending request [{request.model}] to Gemini model: {model}")
 		if temp_files:
 			# With files
 			response = await gemini_client.generate_content(conversation, files=temp_files, model=model)
@@ -346,7 +350,8 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
 		reply_text = reply_text.replace("&lt;","<").replace("\\<","<").replace("\\_","_").replace("\\>",">")
 		reply_text = correct_markdown(reply_text)
 		
-		logger.info(f"Response: {reply_text}")
+		if LOG_LEVEL == "DEBUG" :
+			logger.info(f"Response: {reply_text}")
 
 		if not reply_text or reply_text.strip() == "":
 			logger.warning("Empty response received from Gemini")
@@ -411,7 +416,8 @@ async def create_chat_completion(request: ChatCompletionRequest, api_key: str = 
 				},
 			}
 
-			logger.info(f"Returning response: {result}")
+			if LOG_LEVEL == "DEBUG" :
+				logger.info(f"Returning response: {result}")
 			return result
 
 	except Exception as e:
