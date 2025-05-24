@@ -19,6 +19,7 @@ import logging
 from gemini_webapi import GeminiClient, set_log_level
 from gemini_webapi.constants import Model
 
+from dotenv import load_dotenv
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,7 +38,8 @@ app.add_middleware(
 
 # Global client
 gemini_client = None
-
+# 加载.env文件中的环境变量
+load_dotenv()
 # Authentication credentials
 SECURE_1PSID = os.environ.get("SECURE_1PSID", "")
 SECURE_1PSIDTS = os.environ.get("SECURE_1PSIDTS", "")
